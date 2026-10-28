@@ -5,16 +5,18 @@ from urllib.parse import parse_qs, urljoin, urlparse
 import click
 import requests
 from bs4 import BeautifulSoup
+from requests.adapters import HTTPAdapter
 from requests_cache import CachedSession
 from tqdm import tqdm
+from urllib3.util.retry import Retry
 
 
-input_url = "https://volby.gov.cz/pls/ps2017nss/ps3?xjazyk=CZ"
-input_csv_file_location = "results.csv"
-session = CachedSession("cache")
-session.headers["User-Agent"] = "ElectionsScraper/0.1 (+https://github.com/Syndrixxx/Elections_Scraper_All)"
 BASE = "https://volby.gov.cz/pls/ps2017nss/"
 failed = set()
+session = CachedSession("cache")
+session.headers["User-Agent"] = "ElectionsScraper/0.1 (+https://github.com/Syndrixxx/Elections_Scraper_All)"
+retry = Retry(total=3, backoff_factor=2, status_forcelist=[500, 502, 503, 504], raise_on_status=False)
+session.mount("https://", HTTPAdapter(max_retries=retry))
 
 
 def fetch(url: str) -> str | None:
@@ -33,7 +35,6 @@ def fetch(url: str) -> str | None:
         tqdm.write(f"Connection error: {url}")
     except requests.RequestException as e:
         tqdm.write(f"Failed to fetch {url}: {e}")
-    time.sleep(2)
     failed.add(url)
     return None
 
@@ -97,11 +98,15 @@ def write_csv(rows: list[dict], output_file: str) -> None:
 @click.command()
 @click.argument("input_url")
 @click.argument("output_file")
-def main(input_url: str, output_file: str) -> None:
+@click.option("--refresh", is_flag=True, help="Clear the cache before scraping.")
+def main(input_url: str, output_file: str, refresh: bool) -> None:
+    if refresh:
+        session.cache.clear()
     district_links = get_links(input_url, "td[headers$='sa3'] a[href*='ps32']")
     town_links = [BASE + "ps361?xjazyk=CZ"]
     for district_link in tqdm(district_links, desc="Districts"):
-        town_links += get_links(district_link, "td[class~='cislo'][headers~='t1sa1'][headers~='t1sb1'] a[href]")
+        town_links += get_links(district_link, "td.cislo a[href^='ps311?']")
+    tqdm.write(f"Found {len(town_links)} town pages.")
 
     rows = []
     for town_link in tqdm(town_links, desc="Towns"):
@@ -111,12 +116,17 @@ def main(input_url: str, output_file: str) -> None:
         code = int(parse_qs(urlparse(town_link).query).get("xobec", ["0"])[0])
         raw_name = get_text(soup, "div.topline h3:-soup-contains('Obec:')") or ""
         name = "Zahraničí" if code == 0 else raw_name.removeprefix("Obec: ")
+        valid = to_int(get_text(soup, "td[class~='cislo'][headers='sa6']"))
+        if valid is None or not name:
+            tqdm.write(f"No results found: {town_link}")
+            failed.add(town_link)
+            continue
         rows.append({
             "code": code,
             "name": name,
             "registered": to_int(get_text(soup, "td[class~='cislo'][headers='sa2']")),
             "envelopes": to_int(get_text(soup, "td[class~='cislo'][headers='sa3']")),
-            "valid": to_int(get_text(soup, "td[class~='cislo'][headers='sa6']")),
+            "valid": valid,
             **get_votes(soup),
         })
 
