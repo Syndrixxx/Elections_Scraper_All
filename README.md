@@ -1,7 +1,7 @@
 # Elections Scraper
 
 Command-line tool that scrapes the results of the 2017 Czech parliamentary
-election for every municipality from [volby.gov.cz](https://volby.gov.cz/)
+election for every municipality from [volby.gov.cz](https://volby.gov.cz/pls/ps2017nss/ps3?xjazyk=CZ)
 and saves them into a single CSV file.
 
 ## Features
